@@ -1,0 +1,14 @@
+[package]
+name = "karusel"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+core-foundation = "0.9.3"
+core-graphics = "0.22.3"
+objc-foundation = "0.1.1"
+objc_id = "0.1.1"
+plist = "1.3.1"
+serde = { version = "1.0.136", features = ["derive"] }
