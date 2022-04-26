@@ -1,17 +1,22 @@
 #![allow(non_snake_case)]
+use core_foundation::dictionary::CFDictionaryApplyFunction;
 use core_foundation::string::*;
 use core_graphics::display::*;
 
 use core_foundation::base::*;
 use core_foundation::number::{
-    kCFNumberSInt32Type, kCFNumberSInt64Type, CFNumberGetType, CFNumberGetTypeID, CFNumberGetValue,
-    CFNumberRef,
+    kCFNumberIntType, kCFNumberSInt32Type, kCFNumberSInt64Type, CFNumber, CFNumberGetType,
+    CFNumberGetTypeID, CFNumberGetValue, CFNumberRef,
 };
-use core_graphics::window::{kCGWindowLayer, kCGWindowName, kCGWindowNumber, kCGWindowOwnerName};
+use core_graphics::window::{
+    kCGWindowLayer, kCGWindowName, kCGWindowNumber, kCGWindowOwnerName, kCGWindowOwnerPID,
+};
 use objc_foundation::{INSString, NSString};
 use objc_id::Id;
 use std::ffi::{c_void, CStr};
 use std::ops::Deref;
+
+use crate::private::{CGSCopySpacesForWindows, CGSMainConnectionID};
 
 fn get_dict_string(dic_ref: CFDictionaryRef, key: CFStringRef) -> Option<String> {
     let mut value: *const c_void = std::ptr::null();
@@ -77,12 +82,14 @@ pub struct WindowName {
     pub app_name: String,
     pub win_name: String,
     pub window_id: i64,
+    pub pid: i64,
+    pub space_id: i64,
 }
 
 pub fn get_window_names() -> Vec<WindowName> {
     const OPTIONS: CGWindowListOption =
         kCGWindowListOptionAll | kCGWindowListExcludeDesktopElements;
-    // const OPTIONS: CGWindowListOption = kCGWindowListOptionOnScreenOnly;
+
     let window_list_info = unsafe { CGWindowListCopyWindowInfo(OPTIONS, kCGNullWindowID) };
     let count = unsafe { CFArrayGetCount(window_list_info) };
 
@@ -109,6 +116,10 @@ pub fn get_window_names() -> Vec<WindowName> {
             None => continue,
             Some(s) => s,
         };
+        let window_psn = match get_dict_number(dic_ref, unsafe { kCGWindowOwnerPID }) {
+            None => continue,
+            Some(s) => s,
+        };
         if layer != 0 {
             continue;
         }
@@ -116,16 +127,125 @@ pub fn get_window_names() -> Vec<WindowName> {
             app_name,
             win_name,
             window_id,
+            pid: window_psn,
+            space_id: 0,
         });
     }
+
+    let connection = unsafe { CGSMainConnectionID() };
+    let mask = 7;
+
+    for window in result.iter_mut() {
+        window.space_id = {
+            let window_id = CFNumber::from(window.window_id as i32);
+            let window_id_ref = window_id.as_CFType();
+
+            let array = CFArray::<CFType>::from_CFTypes(&[window_id_ref]);
+            let re = array.as_concrete_TypeRef();
+
+            let windows = unsafe { CGSCopySpacesForWindows(connection, mask, re) };
+
+            let count = unsafe { CFArrayGetCount(windows) };
+
+            let mut out = 0;
+            for i in 0..count {
+                let value = unsafe { CFArrayGetValueAtIndex(windows, i as isize) as CFNumberRef };
+
+                let mut result = 0;
+                let result_ref: *mut i64 = &mut result;
+                unsafe { CFNumberGetValue(value, kCFNumberIntType, result_ref.cast()) };
+
+                out = result;
+            }
+            out
+        };
+    }
+
     unsafe { CFRelease(window_list_info as CFTypeRef) }
     result
 }
 
 #[test]
+fn get_window_name_from_id() {
+    const OPTIONS: CGWindowListOption = kCGWindowListOptionAll
+        | kCGWindowListExcludeDesktopElements
+        | kCGWindowListOptionOnScreenOnly;
+
+    let window_list_info = unsafe { CGWindowListCopyWindowInfo(OPTIONS, kCGNullWindowID) };
+    let count = unsafe { CFArrayGetCount(window_list_info) };
+
+    for i in 0..count {
+        let dic_ref =
+            unsafe { CFArrayGetValueAtIndex(window_list_info, i as isize) as CFDictionaryRef };
+
+        // let key = CFString::new("kCGWindowNumber");
+        // let mut value: *const c_void = std::ptr::null();
+
+        // if unsafe { CFDictionaryGetValueIfPresent(dic_ref, key.to_void(), &mut value) != 0 } {
+        //     let cf_ref = value as CFNumberRef;
+
+        //     let mut number: *const c_void = std::ptr::null();
+        //     let c_ptr = unsafe { CFNumberGetValue(cf_ref, kCFNumberLongType, number as *mut _) };
+
+        //     // let c_ptr = unsafe { CFNumberGetValue(cf_ref, kCFStringEncodingUTF8) };
+        //     if !number.is_null() {
+        //         let c_result = unsafe { CFNumber::from_mut_void(number as *mut _) };
+
+        //         // println!("window owner name: {}", result)
+        //     }
+        // }
+
+        extern "C" fn callback(
+            key: *const std::ffi::c_void,
+            value: *const std::ffi::c_void,
+            cx: *mut std::ffi::c_void,
+        ) -> () {
+            let cf_ref = key as CFStringRef;
+            let c_ptr = unsafe { CFStringGetCStringPtr(cf_ref, kCFStringEncodingUTF8) };
+
+            if !c_ptr.is_null() {
+                let c_result = unsafe { CStr::from_ptr(c_ptr) };
+                let result = String::from(c_result.to_str().unwrap());
+                println!("Key: {}", result);
+            }
+        }
+
+        let cx: *mut c_void = std::ptr::null() as *const c_void as *mut _;
+
+        let cb = callback as *const ();
+
+        unsafe { CFDictionaryApplyFunction(dic_ref, callback, cx) };
+
+        println!("\n");
+
+        let key = CFString::new("kCGWindowOwnerName");
+        let mut value: *const c_void = std::ptr::null();
+
+        if unsafe { CFDictionaryGetValueIfPresent(dic_ref, key.to_void(), &mut value) != 0 } {
+            let cf_ref = value as CFStringRef;
+            let c_ptr = unsafe { CFStringGetCStringPtr(cf_ref, kCFStringEncodingUTF8) };
+            if !c_ptr.is_null() {
+                let c_result = unsafe { CStr::from_ptr(c_ptr) };
+                let result = String::from(c_result.to_str().unwrap());
+                println!("window owner name: {}", result)
+            }
+        }
+    }
+
+    unsafe { CFRelease(window_list_info as CFTypeRef) }
+}
+
+#[test]
 fn print_names() {
-    let names = get_window_names();
-    for name in names {
-        println!("{}[{}]: {}", name.app_name, name.window_id, name.win_name);
+    let windows = get_window_names();
+    for window in windows {
+        if window.space_id != 0 && !window.win_name.is_empty() {
+            println!(
+                "{}[{}:{}:{}]: {}",
+                window.app_name, window.window_id, window.space_id, window.pid, window.win_name
+            );
+        }
+
+        if window.app_name == "Spotify" {}
     }
 }

@@ -1,4 +1,4 @@
-# Karusel: An Alt-Tab alternative for macOS
+# Karusel: TotalSpaces/esque space management for macOS
 
 This project is not done! It doesn't even work!
 

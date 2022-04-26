@@ -1,15 +1,19 @@
 use std::ffi::{c_void, CStr};
+use std::os::raw::c_uint;
 
 use core_foundation::array::{
     CFArray, CFArrayCreate, CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef,
 };
 use core_foundation::base::*;
 use core_foundation::dictionary::{CFDictionaryApplyFunction, CFDictionaryRef};
+use core_foundation::error::{CFError, CFErrorCopyDescription, CFErrorRef};
 use core_foundation::number::{
     kCFNumberIntType, kCFNumberSInt32Type, kCFNumberSInt64Type, CFNumber, CFNumberGetType,
     CFNumberGetTypeID, CFNumberGetValue, CFNumberRef,
 };
-use core_foundation::string::{kCFStringEncodingUTF8, CFStringGetCStringPtr, CFStringRef};
+use core_foundation::string::{
+    kCFStringEncodingUTF8, CFString, CFStringGetCStringPtr, CFStringRef,
+};
 
 #[test]
 fn blah() {
@@ -55,16 +59,13 @@ fn blah() {
 fn get_space_id_for_window() {
     let connection = unsafe { CGSMainConnectionID() };
 
-    let window_id = 57147_i32;
     let mask = 7;
 
-    let n0 = CFNumber::from(window_id);
+    let n0 = CFNumber::from(57147_i32);
+    let n1 = CFNumber::from(56487_i32);
 
-    let array = CFArray::<CFType>::from_CFTypes(&[n0.as_CFType()]);
-
+    let array = CFArray::<CFType>::from_CFTypes(&[n0.as_CFType(), n1.as_CFType()]);
     let re = array.as_concrete_TypeRef();
-
-    // let cf_arr = CFArrayCreate(allocator, values, numValues, callBacks)
 
     let windows = unsafe { CGSCopySpacesForWindows(connection, mask, re) };
 
@@ -75,10 +76,69 @@ fn get_space_id_for_window() {
 
         let mut result = 0;
         let result_ref: *mut i64 = &mut result;
-        unsafe { CFNumberGetValue(value, kCFNumberSInt64Type, result_ref.cast()) };
+        unsafe { CFNumberGetValue(value, kCFNumberIntType, result_ref.cast()) };
 
         println!("{}", result);
     }
+}
+
+type UInt32 = c_uint;
+
+/// Type for unique process identifier.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct ProcessSerialNumber {
+    padding: u32,
+    val: u32,
+}
+
+// pub type ProcessSerialNumberPtr = *mut ProcessSerialNumber;
+
+#[test]
+pub fn focus_window() {
+    let pid = 7020;
+    let wid = 55440;
+
+    let mut psn = pid as i64;
+
+    let ptr = &mut psn;
+
+    let r = unsafe { _SLPSSetFrontProcessWithOptions(ptr, wid, 0x200) };
+
+    println!("{:?}", r);
+}
+
+#[test]
+fn focus_space() {
+    //
+
+    let connection = unsafe { CGSMainConnectionID() };
+
+    let mut psn = ProcessSerialNumber { padding: 0, val: 0 };
+
+    println!("{:?}", connection);
+
+    let err = unsafe { SLSGetConnectionPSN(connection, &mut psn) };
+
+    println!("{:?} - {:?}", err, psn);
+
+    // let s = CFString::new("2DECDF5A-6513-48EF-92E2-CF9694BBEAFF");
+    // let sid = 890;
+    // unsafe { CGSManagedDisplaySetCurrentSpace(connection, s, sid) };
+}
+
+#[link(name = "SkyLight", kind = "framework")]
+extern "C" {
+    fn _SLPSSetFrontProcessWithOptions(
+        psn: *mut i64,
+        wid: mach_port_t,
+        mode: mach_port_t,
+    ) -> CFErrorRef;
+
+    fn SLSGetConnectionPSN(
+        connection: u32,
+        psn: *mut ProcessSerialNumber,
+    ) -> core_graphics::base::CGError;
 }
 
 extern "C" {
@@ -86,17 +146,37 @@ extern "C" {
      * CFDictionary.h
      */
 
-    pub fn CGSMainConnectionID() -> CFIndex;
+    pub fn CGSMainConnectionID() -> u32;
 
-    pub fn CGSGetActiveSpace(connect: CFIndex) -> CFIndex;
+    pub fn CGSGetActiveSpace(connect: u32) -> CFIndex;
 
-    pub fn CGSCopyManagedDisplaySpaces(connect: CFIndex) -> CFArrayRef;
+    pub fn CGSCopyManagedDisplaySpaces(connect: u32) -> CFArrayRef;
 
-    pub fn CGSCopySpacesForWindows(
+    pub fn CGSCopySpacesForWindows(cid: u32, mask: CFOptionFlags, wids: CFArrayRef) -> CFArrayRef;
+
+    pub fn CGSManagedDisplaySetCurrentSpace(
         cid: CFIndex,
-        mask: CFOptionFlags,
-        wids: CFArrayRef,
-    ) -> CFArrayRef;
+        // cid: CGSConnectionID,
+        display: CFString,
+        // display: CFString,
+        sid: CFIndex,
+    );
+    // pub fn CGSManagedDisplaySetCurrentSpace(
+    //     cid: CGSConnectionID,
+    //     display: CFString,
+    //     sid: CGSSpaceID,
+    // );
+
+    // -> OSStatus;
+    // fn _SLPSSetFrontProcessWithOptions(psn: inout ProcessSerialNumber, _ wid: CGWindowID, _ mode: SLPSMode) -> CGError
+
+    // enum SLPSMode: UInt32 {
+    //     case allWindows = 0x100
+    //     case userGenerated = 0x200
+    //     case noWindows = 0x400
+    // }
+
+    // func _SLPSSetFrontProcessWithOptions(_ psn: inout ProcessSerialNumber, _ wid: CGWindowID, _ mode: SLPSMode) -> CGError
 
     // struct CGSWindowCaptureOptions: OptionSet {
     //     let rawValue: UInt32

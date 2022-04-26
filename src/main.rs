@@ -1,125 +1,118 @@
-use core_foundation::dictionary::CFDictionaryApplyFunction;
-use core_foundation::{base::*, number::CFNumberGetValue};
-
-use core_foundation::number::{kCFNumberLongType, CFNumber, CFNumberRef};
-use core_foundation::string::*;
-use core_graphics::display::*;
-use std::ffi::{c_void, CStr};
+mod plist_parsing;
 mod private;
 mod util;
 
-#[derive(serde::Deserialize)]
-struct Spaces {
-    SpacesDisplayConfiguration: DisplayConfiguration,
-
-    #[serde(rename = "spans-displays")]
-    spans_displays: bool,
-}
-
-#[derive(serde::Deserialize, Debug)]
-struct DisplayConfiguration {
-    #[serde(rename = "Management Data")]
-    management: plist::Dictionary,
-
-    #[serde(rename = "Space Properties")]
-    properties: Vec<DisplayData>,
-}
-
-#[derive(serde::Deserialize, Debug)]
-struct DisplayData {
-    name: String,
-    windows: Vec<i32>,
-}
-
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 fn main() {
-    use plist::Value;
+    use std::{str::FromStr, sync::mpsc};
+    use tao::{
+        accelerator::{Accelerator, AcceleratorId, RawMods, SysMods},
+        event::{Event, WindowEvent},
+        event_loop::{ControlFlow, EventLoop},
+        global_shortcut::ShortcutManager,
+        keyboard::KeyCode,
+        window::WindowBuilder,
+    };
 
-    let book: Spaces =
-        plist::from_file("/Users/jonkelley/Library/Preferences/com.apple.spaces.plist")
-            .expect("failed to read book.plist");
+    let (tx, rx) = mpsc::channel();
 
-    for key in book.SpacesDisplayConfiguration.management.keys() {
-        println!("{:?}", key);
-    }
+    std::thread::spawn(move || {
+        while let Ok(msg) = rx.recv() {
+            println!("Simulating key press");
 
-    for prop in &book.SpacesDisplayConfiguration.properties {
-        println!("{:?}\n", prop);
-    }
+            std::thread::sleep(std::time::Duration::from_millis(1000));
 
-    println!(
-        "there are {} spaces",
-        book.SpacesDisplayConfiguration.properties.len()
-    );
+            simulate(&EventType::KeyPress(Key::ControlLeft)).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+
+            simulate(&EventType::KeyPress(Key::UpArrow)).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            // std::thread::sleep(std::time::Duration::from_millis(1000));
+            simulate(&EventType::KeyRelease(Key::UpArrow)).unwrap();
+
+            // simulate(&EventType::KeyRelease(Key::ControlLeft)).unwrap();
+        }
+    });
+
+    let event_loop = EventLoop::new();
+
+    // create new shortcut manager instance
+    let mut hotkey_manager = ShortcutManager::new(&event_loop);
+
+    // create our accelerators
+    let shortcut_1 = Accelerator::new(SysMods::Shift, KeyCode::ArrowUp);
+    let shortcut_2 = Accelerator::new(RawMods::AltCtrlMeta, KeyCode::KeyB);
+    // use string parser to generate accelerator (require `std::str::FromStr`)
+    let shortcut_3 = Accelerator::from_str("COMMAND+`").unwrap();
+    let shortcut_4 = Accelerator::from_str("COMMANDORCONTROL+shIfT+DOWN").unwrap();
+
+    // save a reference to unregister it later
+    let global_shortcut_1 = hotkey_manager.register(shortcut_1.clone()).unwrap();
+    // register other accelerator's
+    hotkey_manager.register(shortcut_2.clone()).unwrap();
+    hotkey_manager.register(shortcut_3).unwrap();
+    hotkey_manager.register(shortcut_4.clone()).unwrap();
+
+    let window = WindowBuilder::new()
+        .with_title("A fantastic window!")
+        .build(&event_loop)
+        .unwrap();
+
+    event_loop.run(move |event, _, control_flow| {
+        *control_flow = ControlFlow::Wait;
+
+        match event {
+            Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                window_id,
+                ..
+            } if window_id == window.id() => *control_flow = ControlFlow::Exit,
+            Event::MainEventsCleared => {
+                window.request_redraw();
+            }
+            Event::GlobalShortcutEvent(hotkey_id) if hotkey_id == shortcut_1.clone().id() => {
+                println!("Pressed `shortcut_1` -- unregister for future use");
+                // unregister key
+                hotkey_manager
+                    .unregister(global_shortcut_1.clone())
+                    .unwrap();
+            }
+            Event::GlobalShortcutEvent(hotkey_id) if hotkey_id == shortcut_2.clone().id() => {
+                println!("Pressed on `shortcut_2`");
+            }
+            // you can match hotkey_id with accelerator_string only if you used `from_str`
+            // by example `shortcut_1` will NOT match AcceleratorId::new("SHIFT+UP") as it's
+            // been created with a struct and the ID is generated automatically
+            Event::GlobalShortcutEvent(hotkey_id)
+                if hotkey_id == AcceleratorId::new("COMMANDORCONTROL+SHIFT+3") =>
+            {
+                println!("Pressed on `shortcut_3`");
+            }
+            Event::GlobalShortcutEvent(hotkey_id) if hotkey_id == shortcut_4.clone().id() => {
+                println!("Pressed on `shortcut_4`");
+            }
+            Event::GlobalShortcutEvent(hotkey_id) => {
+                println!("hotkey_id {:?}", hotkey_id);
+
+                //
+                tx.send(());
+            }
+            _ => (),
+        }
+    });
 }
 
-#[test]
-fn get_window_name_from_id() {
-    const OPTIONS: CGWindowListOption = kCGWindowListOptionAll
-        | kCGWindowListExcludeDesktopElements
-        | kCGWindowListOptionOnScreenOnly;
+use rdev::{simulate, Button, EventType, Key, SimulateError};
+use std::{thread, time};
 
-    let window_list_info = unsafe { CGWindowListCopyWindowInfo(OPTIONS, kCGNullWindowID) };
-    let count = unsafe { CFArrayGetCount(window_list_info) };
-
-    // for i in 0..1 {
-
-    for i in 0..count {
-        let dic_ref =
-            unsafe { CFArrayGetValueAtIndex(window_list_info, i as isize) as CFDictionaryRef };
-
-        // let key = CFString::new("kCGWindowNumber");
-        // let mut value: *const c_void = std::ptr::null();
-
-        // if unsafe { CFDictionaryGetValueIfPresent(dic_ref, key.to_void(), &mut value) != 0 } {
-        //     let cf_ref = value as CFNumberRef;
-
-        //     let mut number: *const c_void = std::ptr::null();
-        //     let c_ptr = unsafe { CFNumberGetValue(cf_ref, kCFNumberLongType, number as *mut _) };
-
-        //     // let c_ptr = unsafe { CFNumberGetValue(cf_ref, kCFStringEncodingUTF8) };
-        //     if !number.is_null() {
-        //         let c_result = unsafe { CFNumber::from_mut_void(number as *mut _) };
-
-        //         // println!("window owner name: {}", result)
-        //     }
-        // }
-
-        extern "C" fn callback(
-            key: *const std::ffi::c_void,
-            value: *const std::ffi::c_void,
-            cx: *mut std::ffi::c_void,
-        ) -> () {
-            let cf_ref = key as CFStringRef;
-            let c_ptr = unsafe { CFStringGetCStringPtr(cf_ref, kCFStringEncodingUTF8) };
-
-            if !c_ptr.is_null() {
-                let c_result = unsafe { CStr::from_ptr(c_ptr) };
-                let result = String::from(c_result.to_str().unwrap());
-                println!("Key: {}", result);
-            }
-        }
-
-        let cx: *mut c_void = std::ptr::null() as *const c_void as *mut _;
-
-        let cb = callback as *const ();
-
-        unsafe { CFDictionaryApplyFunction(dic_ref, callback, cx) };
-
-        println!("\n");
-        
-        let key = CFString::new("kCGWindowOwnerName");
-        let mut value: *const c_void = std::ptr::null();
-
-        if unsafe { CFDictionaryGetValueIfPresent(dic_ref, key.to_void(), &mut value) != 0 } {
-            let cf_ref = value as CFStringRef;
-            let c_ptr = unsafe { CFStringGetCStringPtr(cf_ref, kCFStringEncodingUTF8) };
-            if !c_ptr.is_null() {
-                let c_result = unsafe { CStr::from_ptr(c_ptr) };
-                let result = String::from(c_result.to_str().unwrap());
-                println!("window owner name: {}", result)
-            }
+fn send(event_type: &EventType) {
+    // let delay = time::Duration::from_millis(100);
+    match simulate(event_type) {
+        Ok(()) => (),
+        Err(SimulateError) => {
+            println!("We could not send {:?}", event_type);
         }
     }
-
-    unsafe { CFRelease(window_list_info as CFTypeRef) }
+    // Let ths OS catchup (at least MacOS)
+    // thread::sleep(delay);
 }
