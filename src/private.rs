@@ -1,11 +1,13 @@
 use std::ffi::{c_void, CStr};
 
-use core_foundation::array::{CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef};
+use core_foundation::array::{
+    CFArray, CFArrayCreate, CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef,
+};
 use core_foundation::base::*;
 use core_foundation::dictionary::{CFDictionaryApplyFunction, CFDictionaryRef};
 use core_foundation::number::{
-    kCFNumberIntType, kCFNumberSInt32Type, kCFNumberSInt64Type, CFNumberGetType, CFNumberGetTypeID,
-    CFNumberGetValue, CFNumberRef,
+    kCFNumberIntType, kCFNumberSInt32Type, kCFNumberSInt64Type, CFNumber, CFNumberGetType,
+    CFNumberGetTypeID, CFNumberGetValue, CFNumberRef,
 };
 use core_foundation::string::{kCFStringEncodingUTF8, CFStringGetCStringPtr, CFStringRef};
 
@@ -49,6 +51,36 @@ fn blah() {
     // dbg!(r);
 }
 
+#[test]
+fn get_space_id_for_window() {
+    let connection = unsafe { CGSMainConnectionID() };
+
+    let window_id = 57147_i32;
+    let mask = 7;
+
+    let n0 = CFNumber::from(window_id);
+
+    let array = CFArray::<CFType>::from_CFTypes(&[n0.as_CFType()]);
+
+    let re = array.as_concrete_TypeRef();
+
+    // let cf_arr = CFArrayCreate(allocator, values, numValues, callBacks)
+
+    let windows = unsafe { CGSCopySpacesForWindows(connection, mask, re) };
+
+    let count = unsafe { CFArrayGetCount(windows) };
+
+    for i in 0..count {
+        let value = unsafe { CFArrayGetValueAtIndex(windows, i as isize) as CFNumberRef };
+
+        let mut result = 0;
+        let result_ref: *mut i64 = &mut result;
+        unsafe { CFNumberGetValue(value, kCFNumberSInt64Type, result_ref.cast()) };
+
+        println!("{}", result);
+    }
+}
+
 extern "C" {
     /*
      * CFDictionary.h
@@ -59,6 +91,29 @@ extern "C" {
     pub fn CGSGetActiveSpace(connect: CFIndex) -> CFIndex;
 
     pub fn CGSCopyManagedDisplaySpaces(connect: CFIndex) -> CFArrayRef;
+
+    pub fn CGSCopySpacesForWindows(
+        cid: CFIndex,
+        mask: CFOptionFlags,
+        wids: CFArrayRef,
+    ) -> CFArrayRef;
+
+    // struct CGSWindowCaptureOptions: OptionSet {
+    //     let rawValue: UInt32
+    //     static let ignoreGlobalClipShape = CGSWindowCaptureOptions(rawValue: 1 << 11)
+    //     // on a retina display, 1px is spread on 4px, so nominalResolution is 1/4 of bestResolution
+    //     static let nominalResolution = CGSWindowCaptureOptions(rawValue: 1 << 9)
+    //     static let bestResolution = CGSWindowCaptureOptions(rawValue: 1 << 8)
+    // }
+
+    // enum CGSSpaceMask: Int {
+    //     case current = 5
+    //     case other = 6
+    //     case all = 7
+    // }
+
+    // pub fn CGSCopySpacesForWindows( cid: CGSConnectionID,  mask: CGSSpaceMask.RawValue,  wids: CFArrayRef) -> CFArrayRef;
+
     // // XXX: Undocumented private API to get the CGSSpaceID for the active space
     // CGSSpaceID CGSGetActiveSpace(CGSConnectionID connection);
 
@@ -121,3 +176,35 @@ extern "C" {
     // pub fn CFDictionaryRemoveValue(theDict: CFMutableDictionaryRef, key: *const c_void);
     // pub fn CFDictionaryRemoveAllValues(theDict: CFMutableDictionaryRef);
 }
+
+// fn convert_num(value: CFNumberRef) -> i32 {
+//     let type_id: CFTypeID = unsafe { CFGetTypeID(value) };
+//     if type_id != unsafe { CFNumberGetTypeID() } {
+//         return None;
+//     }
+//     let value = value as CFNumberRef;
+//     match unsafe { CFNumberGetType(value) } {
+//         I64 if I64 == kCFNumberSInt64Type => {
+//             let mut result: i64 = 0;
+//             let result_ref: *mut i64 = &mut result;
+//             if unsafe { CFNumberGetValue(value, I64, result_ref.cast()) } {
+//                 Some(result)
+//             } else {
+//                 None
+//             }
+//         }
+//         I32 if I32 == kCFNumberSInt32Type => {
+//             let mut result: i32 = 0;
+//             let result_ref: *mut i32 = &mut result;
+//             if unsafe { CFNumberGetValue(value, I32, result_ref.cast()) } {
+//                 Some(result as i64)
+//             } else {
+//                 None
+//             }
+//         }
+//         n => {
+//             eprintln!("Unsupported Number of typeId: {}", n);
+//             None
+//         }
+//     }
+// }

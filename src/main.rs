@@ -105,20 +105,20 @@ fn get_window_name_from_id() {
 
         unsafe { CFDictionaryApplyFunction(dic_ref, callback, cx) };
 
-        println!("\n")
+        println!("\n");
+        
+        let key = CFString::new("kCGWindowOwnerName");
+        let mut value: *const c_void = std::ptr::null();
 
-        // let key = CFString::new("kCGWindowOwnerName");
-        // let mut value: *const c_void = std::ptr::null();
-
-        // if unsafe { CFDictionaryGetValueIfPresent(dic_ref, key.to_void(), &mut value) != 0 } {
-        //     let cf_ref = value as CFStringRef;
-        //     let c_ptr = unsafe { CFStringGetCStringPtr(cf_ref, kCFStringEncodingUTF8) };
-        //     if !c_ptr.is_null() {
-        //         let c_result = unsafe { CStr::from_ptr(c_ptr) };
-        //         let result = String::from(c_result.to_str().unwrap());
-        //         println!("window owner name: {}", result)
-        //     }
-        // }
+        if unsafe { CFDictionaryGetValueIfPresent(dic_ref, key.to_void(), &mut value) != 0 } {
+            let cf_ref = value as CFStringRef;
+            let c_ptr = unsafe { CFStringGetCStringPtr(cf_ref, kCFStringEncodingUTF8) };
+            if !c_ptr.is_null() {
+                let c_result = unsafe { CStr::from_ptr(c_ptr) };
+                let result = String::from(c_result.to_str().unwrap());
+                println!("window owner name: {}", result)
+            }
+        }
     }
 
     unsafe { CFRelease(window_list_info as CFTypeRef) }
