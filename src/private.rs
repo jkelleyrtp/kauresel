@@ -1,11 +1,16 @@
 use std::ffi::{c_void, CStr};
 use std::os::raw::c_uint;
 
+use accessibility_sys::{
+    kAXRaiseAction, kAXTitleAttribute, kAXWindowsAttribute, AXError, AXUIElementCopyAttributeValue,
+    AXUIElementCopyAttributeValues, AXUIElementCreateApplication, AXUIElementCreateSystemWide,
+    AXUIElementPerformAction, AXUIElementRef,
+};
 use core_foundation::array::{
     CFArray, CFArrayCreate, CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef,
 };
 use core_foundation::base::*;
-use core_foundation::dictionary::{CFDictionaryApplyFunction, CFDictionaryRef};
+use core_foundation::dictionary::{CFDictionary, CFDictionaryApplyFunction, CFDictionaryRef};
 use core_foundation::error::{CFError, CFErrorCopyDescription, CFErrorRef};
 use core_foundation::number::{
     kCFNumberIntType, kCFNumberSInt32Type, kCFNumberSInt64Type, CFNumber, CFNumberGetType,
@@ -14,6 +19,7 @@ use core_foundation::number::{
 use core_foundation::string::{
     kCFStringEncodingUTF8, CFString, CFStringGetCStringPtr, CFStringRef,
 };
+use core_graphics::window::{CGWindowID, CGWindowListCreateDescriptionFromArray};
 
 #[test]
 fn blah() {
@@ -84,6 +90,28 @@ fn get_space_id_for_window() {
 
 type UInt32 = c_uint;
 
+fn make_key_window() {
+
+    // uint8_t bytes1[0xf8] = {
+    //     [0x04] = 0xF8,
+    //     [0x08] = 0x01,
+    //     [0x3a] = 0x10
+    // };
+
+    // uint8_t bytes2[0xf8] = {
+    //     [0x04] = 0xF8,
+    //     [0x08] = 0x02,
+    //     [0x3a] = 0x10
+    // };
+
+    // memcpy(bytes1 + 0x3c, &window_id, sizeof(uint32_t));
+    // memset(bytes1 + 0x20, 0xFF, 0x10);
+    // memcpy(bytes2 + 0x3c, &window_id, sizeof(uint32_t));
+    // memset(bytes2 + 0x20, 0xFF, 0x10);
+    // SLPSPostEventRecordTo(window_psn, bytes1);
+    // SLPSPostEventRecordTo(window_psn, bytes2);
+}
+
 /// Type for unique process identifier.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -96,16 +124,114 @@ pub struct ProcessSerialNumber {
 
 #[test]
 pub fn focus_window() {
+    // 23468:9:463
+
+    // let wid: u32 = 55440;
+    // let pid = 7020;
+
+    let wid: u32 = 52305;
+    // let wid: u32 = 23468;
+    let pid = 463;
+
+    let mut psn = ProcessSerialNumber { padding: 0, val: 0 };
+    unsafe { GetProcessForPID(pid, &mut psn) };
+
+    let mut bytes1 = [0; 0xf8];
+    bytes1[0x04] = 0xF8;
+    bytes1[0x08] = 0x01;
+    bytes1[0x3a] = 0x10;
+
+    let mut bytes2 = [0; 0xf8];
+    bytes2[0x04] = 0xF8;
+    bytes2[0x08] = 0x02;
+    bytes2[0x3a] = 0x10;
+
+    bytes1[0x3c..(0x3c + 4)].copy_from_slice(&wid.to_le_bytes());
+    bytes1[0x20..(0x20 + 0x10)].fill(0xFF);
+
+    bytes2[0x3c..0x3c + 4].copy_from_slice(&wid.to_le_bytes());
+    bytes2[0x20..(0x20 + 0x10)].fill(0xFF);
+
+    unsafe {
+        _SLPSSetFrontProcessWithOptions(&mut psn, wid, 0x400);
+        let e1 = SLPSPostEventRecordTo(&mut psn, &bytes1);
+        let e2 = SLPSPostEventRecordTo(&mut psn, &bytes2);
+    }
+
+    let app_ref = unsafe { AXUIElementCreateApplication(pid as i32) };
+    let mut window_list_ref = std::ptr::null();
+    unsafe {
+        AXUIElementCopyAttributeValues(
+            app_ref,
+            CFString::new(kAXWindowsAttribute).as_concrete_TypeRef(),
+            0,
+            9999999,
+            &mut window_list_ref,
+        )
+    };
+
+    if !window_list_ref.is_null() {
+        let window_count = unsafe { CFArrayGetCount(window_list_ref) };
+        dbg!(window_count);
+
+        for i in 0..window_count {
+            let mut window_id: u32 = 0;
+
+            let window_ref =
+                unsafe { CFArrayGetValueAtIndex(window_list_ref, i as isize) as AXUIElementRef };
+
+            unsafe { _AXUIElementGetWindow(window_ref, &mut window_id) };
+
+            if window_id == wid {
+                println!("window found, now move the space");
+                std::thread::sleep(std::time::Duration::from_millis(5000));
+                unsafe {
+                    AXUIElementPerformAction(
+                        window_ref,
+                        CFString::new("kAXRaiseAction").as_concrete_TypeRef(),
+                    )
+                };
+
+                println!("Found matching window");
+            }
+
+            println!("Window: {}", window_id);
+        }
+    } else {
+        println!("Window list is null");
+    }
+
+    // TODO: need to get the AXUIElementRef for the window we want to focus
+
+    // let e3 = AXUIElementPerformAction(
+    //     ,
+    //     CFString::new("kAXRaiseAction").as_concrete_TypeRef(),
+    // );
+    // }
+}
+
+#[test]
+fn create_space() {
+    let connection = unsafe { CGSMainConnectionID() };
+
+    let null_ptr: *mut c_void = std::ptr::null() as *const c_void as *mut _;
+
+    let opts = CFDictionary::<CFString, CFString>::from_CFType_pairs(&[]);
+    // CFString::new("CGSSystemProcessType").as_concrete_TypeRef(),
+    // CFNumber::from(0).as_CFType(),
+    // CFString::new("CGSSystemProcessType").as_concrete_TypeRef(),
+    // CFNumber::from(1).as_CFType(),
+    let err = unsafe { CGSSpaceCreate(connection, null_ptr, opts.as_concrete_TypeRef()) };
+
+    println!("{}", err);
+}
+
+#[test]
+fn get_psn() {
     let pid = 7020;
-    let wid = 55440;
-
-    let mut psn = pid as i64;
-
-    let ptr = &mut psn;
-
-    let r = unsafe { _SLPSSetFrontProcessWithOptions(ptr, wid, 0x200) };
-
-    println!("{:?}", r);
+    let mut psn = ProcessSerialNumber { padding: 0, val: 0 };
+    unsafe { GetProcessForPID(pid, &mut psn) };
+    println!("{:?}", psn);
 }
 
 #[test]
@@ -114,37 +240,44 @@ fn focus_space() {
 
     let connection = unsafe { CGSMainConnectionID() };
 
-    let mut psn = ProcessSerialNumber { padding: 0, val: 0 };
+    let s = CFString::new("951C832C-A39B-40D9-86B9-F37B79180E2F");
+    let sid = 27;
 
-    println!("{:?}", connection);
+    unsafe { CGSManagedDisplaySetCurrentSpace(connection, s.as_concrete_TypeRef(), sid) };
+}
 
-    let err = unsafe { SLSGetConnectionPSN(connection, &mut psn) };
-
-    println!("{:?} - {:?}", err, psn);
-
-    // let s = CFString::new("2DECDF5A-6513-48EF-92E2-CF9694BBEAFF");
-    // let sid = 890;
-    // unsafe { CGSManagedDisplaySetCurrentSpace(connection, s, sid) };
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    pub fn _AXUIElementGetWindow(el: AXUIElementRef, id: &mut CGWindowID) -> AXError;
 }
 
 #[link(name = "SkyLight", kind = "framework")]
 extern "C" {
-    fn _SLPSSetFrontProcessWithOptions(
-        psn: *mut i64,
-        wid: mach_port_t,
-        mode: mach_port_t,
-    ) -> CFErrorRef;
+    fn _SLPSSetFrontProcessWithOptions(psn: *mut ProcessSerialNumber, wid: u32, mode: u32);
 
     fn SLSGetConnectionPSN(
         connection: u32,
         psn: *mut ProcessSerialNumber,
     ) -> core_graphics::base::CGError;
+
+    fn SLPSPostEventRecordTo(
+        psn: *mut ProcessSerialNumber,
+        event: &[u8],
+    ) -> core_graphics::base::CGError;
+
+    fn GetProcessForPID(pid: i32, psn: *mut ProcessSerialNumber);
 }
+
+// extern CGError SLPSPostEventRecordTo(ProcessSerialNumber *psn, uint8_t *bytes);
 
 extern "C" {
     /*
      * CFDictionary.h
      */
+
+    // CG_EXTERN void CGSManagedDisplaySetCurrentSpace(CGSConnectionID cid, CFStringRef display, CGSSpaceID space);
+
+    pub fn CGSSpaceCreate(connect: u32, null_ptr: *mut c_void, options: CFDictionaryRef) -> u32;
 
     pub fn CGSMainConnectionID() -> u32;
 
@@ -155,11 +288,11 @@ extern "C" {
     pub fn CGSCopySpacesForWindows(cid: u32, mask: CFOptionFlags, wids: CFArrayRef) -> CFArrayRef;
 
     pub fn CGSManagedDisplaySetCurrentSpace(
-        cid: CFIndex,
+        cid: u32,
         // cid: CGSConnectionID,
-        display: CFString,
+        display: CFStringRef,
         // display: CFString,
-        sid: CFIndex,
+        sid: u32,
     );
     // pub fn CGSManagedDisplaySetCurrentSpace(
     //     cid: CGSConnectionID,

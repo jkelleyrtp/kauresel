@@ -2,7 +2,18 @@ mod plist_parsing;
 mod private;
 mod util;
 
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+mod tao_helper;
+
+use std::collections::HashMap;
+
+use cocoa::appkit::{
+    NSApp, NSApplication, NSApplicationActivateIgnoringOtherApps,
+    NSApplicationActivationPolicyRegular, NSBackingStoreBuffered, NSMenu, NSMenuItem,
+    NSRunningApplication, NSWindow, NSWindowStyleMask,
+};
+use cocoa::base::{nil, selector, NO};
+use cocoa::foundation::{NSAutoreleasePool, NSPoint, NSProcessInfo, NSRect, NSSize, NSString};
+
 fn main() {
     use std::{str::FromStr, sync::mpsc};
     use tao::{
@@ -14,26 +25,6 @@ fn main() {
         window::WindowBuilder,
     };
 
-    let (tx, rx) = mpsc::channel();
-
-    std::thread::spawn(move || {
-        while let Ok(msg) = rx.recv() {
-            println!("Simulating key press");
-
-            std::thread::sleep(std::time::Duration::from_millis(1000));
-
-            simulate(&EventType::KeyPress(Key::ControlLeft)).unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(20));
-
-            simulate(&EventType::KeyPress(Key::UpArrow)).unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(20));
-            // std::thread::sleep(std::time::Duration::from_millis(1000));
-            simulate(&EventType::KeyRelease(Key::UpArrow)).unwrap();
-
-            // simulate(&EventType::KeyRelease(Key::ControlLeft)).unwrap();
-        }
-    });
-
     let event_loop = EventLoop::new();
 
     // create new shortcut manager instance
@@ -44,7 +35,7 @@ fn main() {
     let shortcut_2 = Accelerator::new(RawMods::AltCtrlMeta, KeyCode::KeyB);
     // use string parser to generate accelerator (require `std::str::FromStr`)
     let shortcut_3 = Accelerator::from_str("COMMAND+`").unwrap();
-    let shortcut_4 = Accelerator::from_str("COMMANDORCONTROL+shIfT+DOWN").unwrap();
+    let shortcut_4 = Accelerator::from_str("COMMAND+SHIFT+2").unwrap();
 
     // save a reference to unregister it later
     let global_shortcut_1 = hotkey_manager.register(shortcut_1.clone()).unwrap();
@@ -53,12 +44,10 @@ fn main() {
     hotkey_manager.register(shortcut_3).unwrap();
     hotkey_manager.register(shortcut_4.clone()).unwrap();
 
-    let window = WindowBuilder::new()
-        .with_title("A fantastic window!")
-        .build(&event_loop)
-        .unwrap();
+    let mut windows = Vec::new();
+    let mut scroll_id = 0;
 
-    event_loop.run(move |event, _, control_flow| {
+    event_loop.run(move |event, target, control_flow| {
         *control_flow = ControlFlow::Wait;
 
         match event {
@@ -66,9 +55,12 @@ fn main() {
                 event: WindowEvent::CloseRequested,
                 window_id,
                 ..
-            } if window_id == window.id() => *control_flow = ControlFlow::Exit,
+            } => {
+                //
+                // if window_id == window.id() => *control_flow = ControlFlow::Exit
+            }
             Event::MainEventsCleared => {
-                window.request_redraw();
+                // window.request_redraw();
             }
             Event::GlobalShortcutEvent(hotkey_id) if hotkey_id == shortcut_1.clone().id() => {
                 println!("Pressed `shortcut_1` -- unregister for future use");
@@ -89,30 +81,38 @@ fn main() {
                 println!("Pressed on `shortcut_3`");
             }
             Event::GlobalShortcutEvent(hotkey_id) if hotkey_id == shortcut_4.clone().id() => {
-                println!("Pressed on `shortcut_4`");
-            }
-            Event::GlobalShortcutEvent(hotkey_id) => {
-                println!("hotkey_id {:?}", hotkey_id);
+                let window = WindowBuilder::new()
+                    .with_title("A fantastic window!")
+                    .build(target)
+                    .unwrap();
 
+                let id = window.id();
+                windows.push((id, window));
                 //
-                tx.send(());
+            }
+
+            Event::GlobalShortcutEvent(hotkey_id) => {
+                scroll_id += 1;
+                if scroll_id >= windows.len() {
+                    scroll_id = 0;
+                }
+
+                let (id, window) = &mut windows[scroll_id];
+
+                println!("hotkey_id {:?}", hotkey_id);
+                use tao::platform::macos::WindowExtMacOS;
+
+                let id = window.ns_window();
+                let raw_window = id as *mut objc::runtime::Object;
+
+                unsafe {
+                    raw_window.makeKeyAndOrderFront_(nil);
+                }
+
+                let app = unsafe { NSApp() };
+                unsafe { app.activateIgnoringOtherApps_(true) };
             }
             _ => (),
         }
     });
-}
-
-use rdev::{simulate, Button, EventType, Key, SimulateError};
-use std::{thread, time};
-
-fn send(event_type: &EventType) {
-    // let delay = time::Duration::from_millis(100);
-    match simulate(event_type) {
-        Ok(()) => (),
-        Err(SimulateError) => {
-            println!("We could not send {:?}", event_type);
-        }
-    }
-    // Let ths OS catchup (at least MacOS)
-    // thread::sleep(delay);
 }
